@@ -207,7 +207,7 @@ Function Read-ASN1Content {
 			}
 		}
 
-        $Result = @{}
+        [System.Collections.Hashtable]$Result = @{}
 
         $Counter = 0
 
@@ -219,6 +219,8 @@ Function Read-ASN1Content {
 				# The TAG value
 				[System.Byte]$Tag = $Reader.ReadByte()
 
+				Write-Verbose -Message "Processing Tag: 0x$($Tag.ToString("X2"))"
+
 				# Default to 0
 				[System.UInt32]$LengthToReadNext = 0
 
@@ -226,6 +228,8 @@ Function Read-ASN1Content {
 				[System.Byte]$LengthByte = 0x00
 
 				[System.Byte[]]$Bytes = @()
+				
+				Remove-Variable -Name "Data" -Force -ErrorAction SilentlyContinue
 				$Data = $null
         
 				# If the length of the sequence is more than 127 bytes
@@ -242,10 +246,12 @@ Function Read-ASN1Content {
 				{
 					# Boolean
 					0x01 {
+
 						$LengthToReadNext = Get-ASN1ValueLength -Reader $Reader
                 
 						$Bytes = $Reader.ReadBytes($LengthToReadNext)
-						$Data = [System.Convert]::ToBoolean($Bytes[0])
+
+						[System.Boolean]$Data = [System.Convert]::ToBoolean($Bytes[0])
 
 						break
 					}
@@ -255,14 +261,14 @@ Function Read-ASN1Content {
 
 						$Bytes = $Reader.ReadBytes($LengthToReadNext)
 
-						$Bytes = Set-ByteArrayPadding $Bytes -Length 4
-
 						if ([System.BitConverter]::IsLittleEndian)
 						{
 							[System.Array]::Reverse($Bytes)
 						}
 
-						$Data = [System.Convert]::ToBase64String($Bytes)
+						$Bytes = Set-ByteArrayPadding $Bytes -Length 4
+
+						[System.String]$Data = [System.Convert]::ToBase64String($Bytes)
 
 						break
 					}
@@ -417,12 +423,29 @@ Function Read-ASN1Content {
 
 						break
 					}
+					# Constructed Context, This is a Tagged Value
+					{($_ -band 0xA0) -eq 0xA0} {
+						$LengthToReadNext = Get-ASN1ValueLength -Reader $Reader -UseLongLengthFormat
+
+						$Bytes = $Reader.ReadBytes($LengthToReadNext)
+
+						[System.Collections.Hashtable]$Data = @{}
+
+						[System.UInt32]$ContextSpecificTag = $_ -band 0x0F
+
+						break
+					}
 					default {
 						throw New-Object -TypeName System.ArgumentOutOfRangeException("The current position in the stream does not identify an known ASN.1 item, received: 0x$($Tag.ToString("X2"))")
 					}
 				}
 
 				$Temp = @{"Tag" = $Tag; "Data" = $Data; "Length" = $LengthToReadNext }
+
+				if ($ContextSpecificTag -ne $null)
+				{
+					$Temp.Add("ContextSpecificTag", $ContextSpecificTag)
+				}
 
 				if ($Tag -in @(0x30, 0x31))
 				{               
@@ -457,11 +480,11 @@ Function Read-ASN1Content {
 								if ($i -eq $Bytes.Length - 1)
 								{
 									# Take from 0 and as many bits as are important
-									$SB.Append([System.Convert]::ToString($Bytes[$i], 2).Substring(0, 8 - $ShiftAmount))
+									$SB.Append([System.Convert]::ToString($Bytes[$i], 2).Substring(0, 8 - $ShiftAmount)) | Out-Null
 								}
 								else
 								{
-									$SB.Append([System.Convert]::ToString($Bytes[$i], 2))
+									$SB.Append([System.Convert]::ToString($Bytes[$i], 2)) | Out-Null
 								}
 							}
 
@@ -471,7 +494,7 @@ Function Read-ASN1Content {
 							[System.Int32]$Remainder = $BitString.Length % 8
 							if ($Remainder -ne 0)
 							{
-								$BitString.PadLeft($BitString.Length + (8 - $Remainder), '0')
+								$BitString = $BitString.PadLeft($BitString.Length + (8 - $Remainder), '0')
 							}
 
 							# Creating a little endian byte array, the BitString length will be evenly divisble by 8
@@ -491,6 +514,19 @@ Function Read-ASN1Content {
 							}
 						}
 
+						$Temp["Data"] = Read-ASN1Content -Content $Bytes
+
+						$Result.Add(($Counter++).ToString(), $Temp)
+					}
+					catch [System.ArgumentOutOfRangeException] {
+						$Temp["Data"] = [System.Convert]::ToBase64String($Bytes)
+						$Result.Add(($Counter++).ToString(), $Temp)
+					}
+				}
+				elseif(($Tag -band 0xA0) -eq 0xA0)
+				{
+					try 
+					{
 						$Temp["Data"] = Read-ASN1Content -Content $Bytes
 
 						$Result.Add(($Counter++).ToString(), $Temp)
