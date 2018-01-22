@@ -260,7 +260,7 @@ Function Read-ASN1Content {
 							[System.Array]::Reverse($Bytes)
 						}
 
-						$Data = [System.BitConverter]::ToUInt32($Bytes, 0)
+						$Data = [System.Convert]::ToBase64String($Bytes)
 
 						break
 					}
