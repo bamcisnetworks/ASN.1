@@ -111,7 +111,7 @@ Function Read-ASN1Content {
 
 			@{
 				"0" = {
-					"Data" = 5;
+					"Data" = abc;
 					"Length = 1;
 					"Tag" = 0x02
 				},
@@ -121,6 +121,8 @@ Function Read-ASN1Content {
 					"Tag" = 0x01
 				}
 			}
+
+			Integer values are returned as a base64 string. All other primitive values are returned as their value type.
 
 		.PARAMETER Reader
 			A binary reader whose current position is on a tag value for the ASN.1 structure.
