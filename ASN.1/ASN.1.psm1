@@ -271,6 +271,8 @@ Function Read-ASN1Content {
 					0x03 {
 						$LengthToReadNext = Get-ASN1ValueLength -Reader $Reader -UseLongLengthFormat
 
+						$UnusedBitsByte = $Reader.ReadByte()
+
 						$Bytes = $Reader.ReadBytes($LengthToReadNext)
                 
 						# Need to find best way to read bit string
@@ -434,11 +436,67 @@ Function Read-ASN1Content {
 				{
 					try 
 					{
+						if ($UnusedBitsByte -ne $null -and $UnusedBitsByte -ne 0x00)
+						{
+							if ([System.BitConverter]::IsLittleEndian)
+							{
+								[System.Array]::Reverse($Bytes)
+							}
+
+							[System.UInt16]$ShiftAmount = [System.Convert]::ToUInt16($UnusedBitsByte)
+							
+							# Make sure we've zeroed off those bits
+							$Bytes[$Bytes.Length - 1] = ($Bytes[$Bytes.Length - 1] -shr $ShiftAmount) -shl $ShiftAmount
+
+							[System.Text.StringBuilder]$SB = New-Object -TypeName System.Text.StringBuilder
+
+							# Create the long bit string from the current byte array
+							for ($i = 0; $i -lt $Bytes.Length; $i++)
+							{
+								# If this is the last byte, only take as much of it as needed
+								if ($i -eq $Bytes.Length - 1)
+								{
+									# Take from 0 and as many bits as are important
+									$SB.Append([System.Convert]::ToString($Bytes[$i], 2).Substring(0, 8 - $ShiftAmount))
+								}
+								else
+								{
+									$SB.Append([System.Convert]::ToString($Bytes[$i], 2))
+								}
+							}
+
+							[System.String]$BitString = $SB.ToString()
+
+							# Make the bit string 8 bit aligned
+							[System.Int32]$Remainder = $BitString.Length % 8
+							if ($Remainder -ne 0)
+							{
+								$BitString.PadLeft($BitString.Length + (8 - $Remainder), '0')
+							}
+
+							# Creating a little endian byte array, the BitString length will be evenly divisble by 8
+							[System.Byte[]]$NewBytes = New-Object -TypeName System.Byte[] -ArgumentList ($BitString.Length / 8)
+
+							for ($i = 0; $i -lt $NewBytes.Length; $i++)
+							{
+								$NewBytes[$i] = [System.Convert]::ToByte($BitString.Substring($i * 8, 8), 2)
+							}
+
+							$Bytes = $NewBytes
+
+							# Swap the byte array order back if we swapped it earlier
+							if ([System.BitConverter]::IsLittleEndian)
+							{
+								[System.Array]::Reverse($Bytes)
+							}
+						}
+
 						$Temp["Data"] = Read-ASN1Content -Content $Bytes
 
 						$Result.Add(($Counter++).ToString(), $Temp)
 					}
 					catch [System.ArgumentOutOfRangeException] {
+						$Temp["Data"] = [System.Convert]::ToBase64String($Bytes)
 						$Result.Add(($Counter++).ToString(), $Temp)
 					}
 				}
