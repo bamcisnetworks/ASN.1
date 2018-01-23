@@ -65,10 +65,16 @@ Function Get-ASN1ValueLength {
                         # as doing a -band with 0x0F => 0000 1111
                         [System.UInt16]$MoreBytesToRead = ($LengthByte -shl 4) -shr 4
                     
+                        # These bytes are in bid endian
                         [System.Byte[]]$LengthBytes = $Reader.ReadBytes($MoreBytesToRead)
 
+                        # Pad to the left to extend the bytes to an array of 4 keeping this
+                        # in big endian
                         $LengthBytes = Set-ByteArrayPadding -InputObject $LengthBytes -Length 4
 
+                        # If the system is little endian, reverse this since
+                        # BitConverter.ToUInt32 expects the array to be in the endianess 
+                        # of the system
                         if ([System.BitConverter]::IsLittleEndian)
                         {
                             [System.Array]::Reverse($LengthBytes)
@@ -122,7 +128,8 @@ Function Read-ASN1Content {
 				}
 			}
 
-			Integer values are returned as a base64 string. All other primitive values are returned as their value type.
+			Integer values are returned as a base64 string. All other primitive values are returned as their value type. All values based on byte
+			arrays are represented as stored in the ASN.1 and are not adjusted for any endianess. The ASN.1 format stores the values big-endian.
 
 		.PARAMETER Reader
 			A binary reader whose current position is on a tag value for the ASN.1 structure.
@@ -261,19 +268,13 @@ Function Read-ASN1Content {
 
 						$Bytes = $Reader.ReadBytes($LengthToReadNext)
 
-						if ([System.BitConverter]::IsLittleEndian)
-						{
-							[System.Array]::Reverse($Bytes)
-						}
-
-						$Bytes = Set-ByteArrayPadding $Bytes -Length 4
-
 						[System.String]$Data = [System.Convert]::ToBase64String($Bytes)
 
 						break
 					}
 					# Bit string
-					# A bit or binary string is an arbitrarily long array of bits. Specific bits can be identified by parenthesized integers and assigned names
+					# A bit or binary string is an arbitrarily long array of bits. Specific bits can be 
+					# identified by parenthesized integers and assigned names
 					0x03 {
 						$LengthToReadNext = Get-ASN1ValueLength -Reader $Reader -UseLongLengthFormat
 
@@ -287,7 +288,8 @@ Function Read-ASN1Content {
 						break
 					}
 					# Octet stream
-					# An octet string is an arbitrarily large byte array. Unlike the BIT STRING type, however, specific bits and bytes in the string cannot be assigned names.
+					# An octet string is an arbitrarily large byte array. Unlike the BIT STRING type, however, 
+					# specific bits and bytes in the string cannot be assigned names.
 					0x04 {
 						$LengthToReadNext = Get-ASN1ValueLength -Reader $Reader -UseLongLengthFormat
 
@@ -302,6 +304,7 @@ Function Read-ASN1Content {
 						$LengthToReadNext = $Reader.ReadByte() # This will be 0x00
                 
 						$Bytes = @()
+
 						$Data = $null
 
 						break
@@ -379,7 +382,16 @@ Function Read-ASN1Content {
 
 						$Bytes = $Reader.ReadBytes($LengthToReadNext)
 
-						$Data = [System.BitConverter]::ToUInt64((Set-ByteArrayPadding -InputObject $Bytes -Length 8), 0)
+                        $Bytes = Set-ByteArrayPadding -InputObject $Bytes -Length 8
+
+                        # Correct endianess for the ToUInt64 function, it expects the bytes to be aligned
+                        # to the endianess of the system
+                        if ([System.BitConverter]::IsLittleEndian)
+                        {
+                            [System.Array]::Reverse($Bytes)
+                        }
+
+						$Data = [System.BitConverter]::ToUInt64($Bytes, 0)
 
 						break
 					}
@@ -440,7 +452,7 @@ Function Read-ASN1Content {
 					}
 				}
 
-				$Temp = @{"Tag" = $Tag; "Data" = $Data; "Length" = $LengthToReadNext }
+				[System.Collections.Hashtable]$Temp = @{"Tag" = $Tag; "Data" = $Data; "Length" = $LengthToReadNext }
 
 				if ($ContextSpecificTag -ne $null)
 				{
@@ -461,16 +473,8 @@ Function Read-ASN1Content {
 					{
 						if ($UnusedBitsByte -ne $null -and $UnusedBitsByte -ne 0x00)
 						{
-							if ([System.BitConverter]::IsLittleEndian)
-							{
-								[System.Array]::Reverse($Bytes)
-							}
-
 							[System.UInt16]$ShiftAmount = [System.Convert]::ToUInt16($UnusedBitsByte)
 							
-							# Make sure we've zeroed off those bits
-							$Bytes[$Bytes.Length - 1] = ($Bytes[$Bytes.Length - 1] -shr $ShiftAmount) -shl $ShiftAmount
-
 							[System.Text.StringBuilder]$SB = New-Object -TypeName System.Text.StringBuilder
 
 							# Create the long bit string from the current byte array
@@ -482,6 +486,7 @@ Function Read-ASN1Content {
 									# Take from 0 and as many bits as are important
 									$SB.Append([System.Convert]::ToString($Bytes[$i], 2).Substring(0, 8 - $ShiftAmount)) | Out-Null
 								}
+                                # Otherwise we'll take all of the bits in the byte
 								else
 								{
 									$SB.Append([System.Convert]::ToString($Bytes[$i], 2)) | Out-Null
@@ -492,12 +497,13 @@ Function Read-ASN1Content {
 
 							# Make the bit string 8 bit aligned
 							[System.Int32]$Remainder = $BitString.Length % 8
-							if ($Remainder -ne 0)
+							
+                            if ($Remainder -ne 0)
 							{
 								$BitString = $BitString.PadLeft($BitString.Length + (8 - $Remainder), '0')
 							}
 
-							# Creating a little endian byte array, the BitString length will be evenly divisble by 8
+							# Creating a big endian byte array, the BitString length will be evenly divisble by 8
 							[System.Byte[]]$NewBytes = New-Object -TypeName System.Byte[] -ArgumentList ($BitString.Length / 8)
 
 							for ($i = 0; $i -lt $NewBytes.Length; $i++)
@@ -505,21 +511,20 @@ Function Read-ASN1Content {
 								$NewBytes[$i] = [System.Convert]::ToByte($BitString.Substring($i * 8, 8), 2)
 							}
 
+                            # The bytes are still in big endian order
 							$Bytes = $NewBytes
-
-							# Swap the byte array order back if we swapped it earlier
-							if ([System.BitConverter]::IsLittleEndian)
-							{
-								[System.Array]::Reverse($Bytes)
-							}
 						}
 
 						$Temp["Data"] = Read-ASN1Content -Content $Bytes
 
 						$Result.Add(($Counter++).ToString(), $Temp)
 					}
-					catch [System.ArgumentOutOfRangeException] {
-						$Temp["Data"] = [System.Convert]::ToBase64String($Bytes)
+					catch [System.ArgumentOutOfRangeException] 
+                    {
+                        # Remove the data property because it was originally a hash table and will
+                        # now be a string    
+                        $Temp.Remove("Data")
+						$Temp.Add("Data", [System.Convert]::ToBase64String($Bytes))
 						$Result.Add(($Counter++).ToString(), $Temp)
 					}
 				}
@@ -531,8 +536,12 @@ Function Read-ASN1Content {
 
 						$Result.Add(($Counter++).ToString(), $Temp)
 					}
-					catch [System.ArgumentOutOfRangeException] {
-						$Temp["Data"] = [System.Convert]::ToBase64String($Bytes)
+					catch [System.ArgumentOutOfRangeException] 
+                    {
+						# Remove the data property because it was originally a hash table and will
+                        # now be a string    
+                        $Temp.Remove("Data")
+						$Temp.Add("Data", [System.Convert]::ToBase64String($Bytes))
 						$Result.Add(($Counter++).ToString(), $Temp)
 					}
 				}
