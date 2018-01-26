@@ -226,7 +226,7 @@ Function Read-ASN1Content {
 				# The TAG value
 				[System.Byte]$Tag = $Reader.ReadByte()
 
-				Write-Verbose -Message "Processing Tag: 0x$($Tag.ToString("X2"))"
+				Write-Debug -Message "Processing Tag: 0x$($Tag.ToString("X2"))"
 
 				# Default to 0
 				[System.UInt32]$LengthToReadNext = 0

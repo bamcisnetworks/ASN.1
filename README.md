@@ -7,6 +7,9 @@ RSA private keys from .PEM files and create RSACrytpoServiceProvider objects ent
 
 ## Revision History
 
+### 1.0.0.5
+Moved verbose content to debug content.
+
 ### 1.0.0.4
 Fixed endianess issues with byte arrays and conversions.
 
